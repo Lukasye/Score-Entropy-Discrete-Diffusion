@@ -132,6 +132,8 @@ def _run(rank, world_size, cfg):
     optimize_fn = losses.optimization_manager(cfg)
     train_step_fn = losses.get_step_fn(noise, graph, True, optimize_fn, cfg.training.accum)
     eval_step_fn = losses.get_step_fn(noise, graph, False, optimize_fn, cfg.training.accum)
+    # train_step_fn = losses.get_step_fn(noise, graph, True, optimize_fn, cfg.training.accum, cfg.model)
+    # eval_step_fn = losses.get_step_fn(noise, graph, False, optimize_fn, cfg.training.accum, cfg.model)
 
 
     if cfg.training.snapshot_sampling:
@@ -167,7 +169,7 @@ def _run(rank, world_size, cfg):
                 if cfg.data.valid != "text8":
                     eval_batch = next(eval_iter)['input_ids'].to(device)
                 else:
-                    eval_batch = next(train_iter).to(device)
+                    eval_batch = next(train_iter).to(device)  #TODO: 347892
                 eval_loss = eval_step_fn(state, eval_batch)
 
                 dist.all_reduce(eval_loss)
@@ -175,8 +177,7 @@ def _run(rank, world_size, cfg):
 
                 mprint("step: %d, evaluation_loss: %.5e" % (step, eval_loss.item()))
 
-            if step > 0 and step % cfg.training.snapshot_freq == 0 or step == num_train_steps:
-                # Save the checkpoint.
+            if step > 0 and step % cfg.training.snapshot_freq == 0 or step == num_train_steps: # Save the checkpoint.
                 save_step = step // cfg.training.snapshot_freq
                 if rank == 0:
                     utils.save_checkpoint(os.path.join(

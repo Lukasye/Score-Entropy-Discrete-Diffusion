@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from catsample import sample_categorical
 
 from model import utils as mutils
+from graph_lib import Graph
+from noise_lib import Noise
 
 _PREDICTORS = {}
 
@@ -36,7 +38,7 @@ def get_predictor(name):
 class Predictor(abc.ABC):
     """The abstract class for a predictor algorithm."""
 
-    def __init__(self, graph, noise):
+    def __init__(self, graph: Graph, noise: Noise):
         super().__init__()
         self.graph = graph
         self.noise = noise
@@ -85,6 +87,24 @@ class AnalyticPredictor(Predictor):
         probs = stag_score * self.graph.transp_transition(x, dsigma)
         return sample_categorical(probs)
 
+@register_predictor(name="x0")
+class X0Predictor(Predictor):
+    def update_fn(self, score_fn, x_t, t, step_size):
+        curr_sigma = self.noise(t)[0]
+        next_sigma = self.noise(t - step_size)[0]
+        dsigma = curr_sigma - next_sigma
+
+        x_0_hat_probs = score_fn(x_t, curr_sigma)
+        x_0_hat = sample_categorical(x_0_hat_probs)
+
+        p_xt_given_x0 = self.graph.transition(x_0_hat, curr_sigma)[x_t]
+        p_xtilde_given_x0 = self.graph.transition(x_0_hat, curr_sigma)
+        rate_x_tilde_xt = self.graph.transp_rate(x_t)
+
+        probs = rate_x_tilde_xt * p_xtilde_given_x0 / p_xt_given_x0
+        #TODO: I don't know whether normalisation is needed here
+
+        return sample_categorical(probs)
     
 class Denoiser:
     def __init__(self, graph, noise):
@@ -105,7 +125,8 @@ class Denoiser:
         return sample_categorical(probs)
                        
 
-def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
+def get_sampling_fn(config, graph, noise, batch_dims, eps, device, model):
+    assert model == "sedd" or model == "ce"
     
     sampling_fn = get_pc_sampler(graph=graph,
                                  noise=noise,
@@ -114,13 +135,17 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
                                  steps=config.sampling.steps,
                                  denoise=config.sampling.noise_removal,
                                  eps=eps,
-                                 device=device)
+                                 device=device, model=model)
     
     return sampling_fn
     
 
-def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x):
-    predictor = get_predictor(predictor)(graph, noise)
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, model="sedd"):
+
+    if model == "sedd":
+        predictor = get_predictor(predictor)(graph, noise)
+    elif model == "ce":
+        predictor = get_predictor("x0")(graph, noise)
     projector = proj_fun
     denoiser = Denoiser(graph, noise)
 
@@ -135,7 +160,6 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
             t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
             x = projector(x)
             x = predictor.update_fn(sampling_score_fn, x, t, dt)
-            
 
         if denoise:
             # denoising step
@@ -144,6 +168,6 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
             x = denoiser.update_fn(sampling_score_fn, x, t)
             
         return x
-    
+
     return pc_sampler
 

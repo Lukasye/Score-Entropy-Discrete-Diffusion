@@ -20,6 +20,7 @@ def main():
     model, graph, noise = load_model(args.model_path, device)
     tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
 
+    # TODO: add model parameter
     sampling_fn = sampling.get_pc_sampler(
         graph, noise, (args.batch_size, 1024), 'analytic', args.steps, device=device
     )

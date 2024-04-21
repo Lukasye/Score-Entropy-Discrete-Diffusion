@@ -213,7 +213,9 @@ class Absorbing(Graph):
         return edge
 
     def transition(self, i, sigma):
-        pass
+        # TODO: need to be validated
+        e_sigma = (-sigma).exp()
+        return F.one_hot((self.dim - 1) * torch.ones_like(i), num_classes=self.dim) * (1-e_sigma) - F.one_hot(i, num_classes=self.dim) * e_sigma
     
     def transp_transition(self, i, sigma):
         sigma = unsqueeze_as(sigma, i[..., None])

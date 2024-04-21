@@ -6,13 +6,9 @@ import graph_lib
 from model import utils as mutils
 
 
-def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False):
+def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, model="sedd"):
 
-    def loss_fn(model, batch, cond=None, t=None, perturbed_batch=None):
-        """
-        Batch shape: [B, L] int. D given from graph
-        """
-
+    def perturbed_fn(t, batch, perturbed_batch):
         if t is None:
             if lv:
                 raise NotImplementedError("Yeah I gotta do this later")
@@ -23,6 +19,25 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False):
         
         if perturbed_batch is None:
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
+        
+        return sigma, dsigma, perturbed_batch
+
+    def sedd_loss_fn(model, batch, cond=None, t=None, perturbed_batch=None):
+        """
+        Batch shape: [B, L] int. D given from graph
+        """
+
+        # if t is None:
+        #     if lv:
+        #         raise NotImplementedError("Yeah I gotta do this later")
+        #     else:
+        #         t = (1 - sampling_eps) * torch.rand(batch.shape[0], device=batch.device) + sampling_eps
+            
+        # sigma, dsigma = noise(t)
+        
+        # if perturbed_batch is None:
+        #     perturbed_batch = graph.sample_transition(batch, sigma[:, None])
+        sigma, dsigma, perturbed_batch = perturbed_fn(t, batch, perturbed_batch)
 
         log_score_fn = mutils.get_score_fn(model, train=train, sampling=False)
         log_score = log_score_fn(perturbed_batch, sigma)
@@ -32,7 +47,23 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False):
 
         return loss
 
-    return loss_fn
+    def ce_loss_fn(model, batch, cond=None, t=None, perturbed_batch=None):
+        sigma, _, perturbed_batch = perturbed_fn(t, batch, perturbed_batch)
+
+        log_score_fn = mutils.get_score_fn(model, train=train, sampling=False)
+        x_0_hat = log_score_fn(perturbed_batch, sigma)
+
+        loss = F.cross_entropy(x_0_hat, batch)
+
+        return loss
+
+    if model == "sedd":
+        return sedd_loss_fn
+    elif model == 'ce':
+        return ce_loss_fn
+    else:
+        raise NotImplementedError("This kind of loss function is not implemented!")
+
 
 
 def get_optimizer(config, params):
@@ -55,7 +86,7 @@ def optimization_manager(config):
     def optimize_fn(optimizer, 
                     scaler, 
                     params, 
-                    step, 
+                    step,
                     lr=config.optim.lr,
                     warmup=config.optim.warmup,
                     grad_clip=config.optim.grad_clip):
@@ -74,8 +105,9 @@ def optimization_manager(config):
     return optimize_fn
 
 
-def get_step_fn(noise, graph, train, optimize_fn, accum):
-    loss_fn = get_loss_fn(noise, graph, train)
+def get_step_fn(noise, graph, train, optimize_fn, accum, model):
+    # pass the model parameter to loss_fn generator
+    loss_fn = get_loss_fn(noise, graph, train, model=model)
 
     accum_iter = 0
     total_loss = 0
